@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "login-codex-9router"
+version = "0.1.0"
+description = "Tự động kết nối nhiều tài khoản Codex vào 9router"
+requires-python = ">=3.11"
+dependencies = ["playwright>=1.52,<2"]
+
+[project.scripts]
+login-codex-9router = "login_codex_9router.__main__:main"
+login-codex-9router-gui = "login_codex_9router.gui:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["login_codex_9router*"]
