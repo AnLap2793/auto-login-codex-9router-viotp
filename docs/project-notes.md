@@ -68,6 +68,9 @@ Trong đó:
 - Chỉ xử lý tài khoản và số điện thoại mà người dùng có quyền sử dụng.
 - Không ghi thông tin đăng nhập, khóa 2FA, OTP hoặc API key vào log.
 - Che dữ liệu nhạy cảm trong thông báo lỗi.
-- Cấu hình `HOST` qua UI hoặc biến môi trường; mật khẩu dashboard chỉ giữ trong bộ nhớ.
+- Cấu hình `HOST` qua UI hoặc biến môi trường; GUI lưu HOST, chế độ Chrome và nhà mạng trong `%LOCALAPPDATA%\login-codex-9router\config.json`.
+- Mật khẩu dashboard và token VIOTP được mã hóa bằng Windows DPAPI trước khi lưu; tiến trình cùng tài khoản Windows vẫn có thể giải mã và secret vẫn tồn tại trong RAM khi sử dụng.
+- Không persist danh sách tài khoản, mật khẩu OpenAI, TOTP secret, OTP, cookie hoặc số dư VIOTP.
+- Nếu JSON hỏng hoặc không hợp lệ, GUI dùng toàn bộ cấu hình mặc định và cảnh báo một lần khi khởi động.
 - Dừng luồng khi CAPTCHA hoặc bước xác minh thủ công xuất hiện; không triển khai cơ chế vượt CAPTCHA.
 - Không tích hợp API thuê số hoặc cơ chế dùng số tạm để vượt xác minh điện thoại.

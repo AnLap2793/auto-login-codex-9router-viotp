@@ -4,6 +4,7 @@ import tkinter as tk
 from collections.abc import Callable
 from tkinter import messagebox, ttk
 
+from .config import DEFAULT_NETWORK
 from .integrations.viotp import OPENAI_SERVICE, ViotpError, get_balance, get_networks
 from .ui_models import ViotpConfig
 
@@ -41,7 +42,7 @@ class ViotpConfigOverlay(ttk.Frame):
         ttk.Button(header, text="×", width=3, command=self.close).pack(side="right")
         ttk.Label(
             card,
-            text="Cấu hình chỉ được giữ trong bộ nhớ phiên chạy.",
+            text="Token được lưu bằng bảo vệ dữ liệu của tài khoản Windows.",
             style="ModalHint.TLabel",
         ).pack(anchor="w", pady=(3, 18))
 
@@ -68,9 +69,11 @@ class ViotpConfigOverlay(ttk.Frame):
         self.status.pack(side="left", padx=12)
 
         ttk.Label(card, text="Nhà mạng", style="Modal.TLabel").pack(anchor="w")
-        self.network = ttk.Combobox(card, state="readonly", values=("Tất cả nhà mạng",))
+        current_network = current.network if current else DEFAULT_NETWORK
+        networks = (DEFAULT_NETWORK,) if current_network == DEFAULT_NETWORK else (DEFAULT_NETWORK, current_network)
+        self.network = ttk.Combobox(card, state="readonly", values=networks)
         self.network.pack(fill="x", pady=(6, 12), ipady=4)
-        self.network.set(current.network if current else "Tất cả nhà mạng")
+        self.network.set(current_network)
 
         service = (
             f"{OPENAI_SERVICE.name} · ID {OPENAI_SERVICE.id} · "
@@ -108,10 +111,16 @@ class ViotpConfigOverlay(ttk.Frame):
     def _token_changed(self, _event: tk.Event | None = None) -> None:
         if self.checking:
             return
+        token = self.token.get().strip()
+        self.network.configure(values=(DEFAULT_NETWORK,))
+        self.network.set(DEFAULT_NETWORK)
+        if not token:
+            self.verified = ViotpConfig("", DEFAULT_NETWORK, None)
+            self.status.configure(text="VIOTP: Sẽ xóa cấu hình")
+            self.save_button.configure(state="normal")
+            return
         self.verified = None
         self.status.configure(text="VIOTP: Chưa kiểm tra")
-        self.network.configure(values=("Tất cả nhà mạng",))
-        self.network.set("Tất cả nhà mạng")
         self.save_button.configure(state="disabled")
 
     def _check(self) -> None:
@@ -149,17 +158,18 @@ class ViotpConfigOverlay(ttk.Frame):
             self._token_changed()
             messagebox.showerror("Không thể kết nối VIOTP", event[2], parent=self)
         else:
-            values = ("Tất cả nhà mạng", *event[3])
+            values = (DEFAULT_NETWORK, *event[3])
             self.network.configure(values=values)
-            self.network.set("Tất cả nhà mạng")
-            self.verified = ViotpConfig(event[1], "Tất cả nhà mạng", event[2])
+            self.network.set(DEFAULT_NETWORK)
+            self.verified = ViotpConfig(event[1], DEFAULT_NETWORK, event[2])
             self.status.configure(text=self.verified.summary)
             self.save_button.configure(state="normal")
         self.after(100, self._drain_events)
 
     def _save(self) -> None:
-        if not self.verified or self.token.get().strip() != self.verified.token:
+        token = self.token.get().strip()
+        if not self.verified or token != self.verified.token:
             return
-        config = ViotpConfig(self.verified.token, self.network.get(), self.verified.balance)
+        config = ViotpConfig(token, self.network.get(), self.verified.balance)
         self.on_save(config)
         self.close()

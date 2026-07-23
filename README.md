@@ -65,12 +65,12 @@ Sau lần cài đầu, chỉ cần chạy:
 ### Sử dụng
 
 1. Đảm bảo 9router đang chạy, sau đó nhập `9router HOST`, ví dụ `http://localhost:20127`.
-2. Nhập mật khẩu dashboard nếu 9router bật đăng nhập. Mật khẩu chỉ tồn tại trong bộ nhớ.
+2. Nhập mật khẩu dashboard nếu 9router bật đăng nhập. Mật khẩu được Windows DPAPI bảo vệ trước khi lưu.
 3. Chọn chế độ Chrome:
    - **Hiển thị**: phù hợp khi cần xử lý CAPTCHA hoặc xác minh thủ công.
    - **Chạy ẩn**: không mở cửa sổ Chrome nhưng khó xử lý các bước xác minh thủ công.
 4. Nhấn **Cấu hình VIOTP** ở góc trên bên phải. Trong modal, nhập token rồi nhấn **Kiểm tra kết nối**; chọn một nhà mạng hoặc giữ **Tất cả nhà mạng**, sau đó nhấn **Lưu cấu hình**.
-5. Header chỉ hiển thị trạng thái và số dư VIOTP. Dịch vụ mặc định là **OpenAI | ChatGPT** (`id=1234`, giá `2.900đ`). Token VIOTP chỉ tồn tại trong bộ nhớ.
+5. Header chỉ hiển thị trạng thái và số dư VIOTP. Dịch vụ mặc định là **OpenAI | ChatGPT** (`id=1234`, giá `2.900đ`). Token VIOTP được Windows DPAPI bảo vệ trước khi lưu.
 6. Dán tài khoản hoặc nhấn **Chọn file .txt**. Mỗi tài khoản nằm trên một dòng:
 
 ```text
@@ -80,6 +80,18 @@ email|password|2fa_secret
 7. Nhấn **Bắt đầu kết nối** và theo dõi bảng trạng thái. Nút **Dừng** hủy các task và đóng toàn bộ Chrome do ứng dụng mở.
 
 Không commit file tài khoản. `.gitignore` loại trừ `accounts*.txt` và `credentials*.txt`.
+
+### Lưu cấu hình
+
+GUI tự khôi phục HOST, chế độ Chrome, mật khẩu dashboard, token VIOTP và nhà mạng từ:
+
+```text
+%LOCALAPPDATA%\login-codex-9router\config.json
+```
+
+Mật khẩu dashboard và token VIOTP được mã hóa bằng Windows DPAPI theo tài khoản Windows hiện tại trước khi ghi JSON. DPAPI ngăn đọc trực tiếp khi file bị sao chép sang tài khoản khác, nhưng tiến trình chạy dưới cùng tài khoản Windows hoặc administrator vẫn có thể giải mã. Secret vẫn tồn tại trong RAM khi ứng dụng sử dụng.
+
+Ứng dụng không lưu danh sách tài khoản, mật khẩu OpenAI, TOTP secret, OTP, cookie hoặc số dư VIOTP. Nếu JSON hỏng hoặc không hợp lệ, GUI dùng cấu hình mặc định và cảnh báo một lần khi khởi động.
 
 ### Xử lý lỗi khởi động
 

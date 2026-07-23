@@ -7,6 +7,14 @@ from tkinter import filedialog, messagebox, ttk
 
 from .accounts import parse_accounts
 from .cancellation import CancellationToken
+from .config import (
+    DEFAULT_NETWORK,
+    AppConfig,
+    ConfigError,
+    load_config,
+    normalize_host,
+    save_config,
+)
 from .runner import StatusUpdate, run_text
 from .ui_models import ViotpConfig, calculate_stats
 from .viotp_dialog import ViotpConfigOverlay
@@ -18,7 +26,12 @@ class Application:
         self.events: queue.Queue[object] = queue.Queue()
         self.worker: threading.Thread | None = None
         self.cancellation: CancellationToken | None = None
-        self.viotp_config: ViotpConfig | None = None
+        self.app_config, config_error = load_config()
+        self.viotp_config = (
+            ViotpConfig(self.app_config.viotp_token, self.app_config.viotp_network, None)
+            if self.app_config.viotp_token
+            else None
+        )
         self.viotp_dialog: ViotpConfigOverlay | None = None
         self.statuses: dict[int, str] = {}
         self.closing = False
@@ -31,6 +44,14 @@ class Application:
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._configure_style()
         self._build()
+        if config_error:
+            root.after_idle(
+                lambda: messagebox.showwarning(
+                    "Không thể đọc cấu hình",
+                    f"Ứng dụng đang dùng cấu hình mặc định.\n\n{config_error}",
+                    parent=root,
+                )
+            )
         root.after(100, self._drain_events)
 
     def _configure_style(self) -> None:
@@ -74,7 +95,8 @@ class Application:
         ).pack(anchor="w", pady=(3, 0))
         settings = ttk.Frame(header)
         settings.grid(row=0, column=1, sticky="e")
-        self.viotp_summary = ttk.Label(settings, text="VIOTP: Chưa cấu hình", style="Hint.TLabel")
+        viotp_summary = self.viotp_config.summary if self.viotp_config else "VIOTP: Chưa cấu hình"
+        self.viotp_summary = ttk.Label(settings, text=viotp_summary, style="Hint.TLabel")
         self.viotp_summary.pack(side="left", padx=(0, 10))
         self.viotp_button = ttk.Button(settings, text="Cấu hình VIOTP", command=self._open_viotp)
         self.viotp_button.pack(side="left")
@@ -83,15 +105,16 @@ class Application:
         connection.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
         ttk.Label(connection, text="9router HOST").pack(anchor="w")
         self.host = ttk.Entry(connection, font=("Segoe UI", 11))
-        self.host.insert(0, "http://localhost:20127")
+        self.host.insert(0, self.app_config.host)
         self.host.pack(fill="x", pady=(6, 13), ipady=7)
         ttk.Label(connection, text="Mật khẩu dashboard (nếu bật đăng nhập)").pack(anchor="w")
         self.dashboard_password = ttk.Entry(connection, font=("Segoe UI", 11), show="•")
+        self.dashboard_password.insert(0, self.app_config.dashboard_password)
         self.dashboard_password.pack(fill="x", pady=(6, 14), ipady=7)
         ttk.Label(connection, text="Chế độ Chrome").pack(anchor="w")
         mode = ttk.Frame(connection)
         mode.pack(fill="x", pady=(6, 3))
-        self.browser_mode = tk.StringVar(value="visible")
+        self.browser_mode = tk.StringVar(value=self.app_config.browser_mode)
         self.visible_mode = ttk.Radiobutton(mode, text="Hiển thị", value="visible", variable=self.browser_mode)
         self.visible_mode.pack(side="left")
         self.headless_mode = ttk.Radiobutton(mode, text="Chạy ẩn", value="headless", variable=self.browser_mode)
@@ -172,8 +195,31 @@ class Application:
         self.viotp_dialog = None
 
     def _save_viotp(self, config: ViotpConfig) -> None:
-        self.viotp_config = config
-        self.viotp_summary.configure(text=config.summary)
+        self.viotp_config = config if config.token else None
+        summary = self.viotp_config.summary if self.viotp_config else "VIOTP: Chưa cấu hình"
+        self.viotp_summary.configure(text=summary)
+        self._persist_app_config()
+
+    def _collect_app_config(self) -> AppConfig:
+        return AppConfig(
+            host=normalize_host(self.host.get()),
+            browser_mode=self.browser_mode.get(),
+            dashboard_password=self.dashboard_password.get(),
+            viotp_token=self.viotp_config.token if self.viotp_config else "",
+            viotp_network=self.viotp_config.network if self.viotp_config else DEFAULT_NETWORK,
+        )
+
+    def _persist_app_config(self, config: AppConfig | None = None, context: str = "Cấu hình vẫn dùng được trong phiên này") -> None:
+        try:
+            config = config or self._collect_app_config()
+            if config != self.app_config:
+                self.app_config = save_config(config)
+        except (ConfigError, OSError, ValueError) as error:
+            messagebox.showwarning(
+                "Không thể lưu cấu hình",
+                f"{context} nhưng chưa được lưu.\n\n{error}",
+                parent=self.root,
+            )
 
     def _update_account_count(self, _event: tk.Event | None = None) -> None:
         accounts, errors = parse_accounts(self.accounts.get("1.0", "end-1c"))
@@ -198,22 +244,27 @@ class Application:
         self._update_account_count()
 
     def _start(self) -> None:
-        host = self.host.get().strip()
         text = self.accounts.get("1.0", "end-1c")
-        if not host or not text.strip():
+        if not self.host.get().strip() or not text.strip():
             messagebox.showwarning("Thiếu dữ liệu", "Nhập HOST và ít nhất một tài khoản.")
             return
+        try:
+            config = self._collect_app_config()
+        except ValueError as error:
+            messagebox.showwarning("HOST không hợp lệ", str(error), parent=self.root)
+            return
+        self._persist_app_config(config, "Automation vẫn tiếp tục")
         for item in self.results.get_children():
             self.results.delete(item)
         self.statuses.clear()
         self._update_stats()
-        password = self.dashboard_password.get() or None
-        headless = self.browser_mode.get() == "headless"
+        password = config.dashboard_password or None
+        headless = config.browser_mode == "headless"
         self.cancellation = CancellationToken()
         self._set_running(True)
         self.worker = threading.Thread(
             target=self._run_worker,
-            args=(text, host, password, headless, self.cancellation),
+            args=(text, config.host, password, headless, self.cancellation),
             daemon=False,
         )
         self.worker.start()
@@ -293,10 +344,15 @@ class Application:
         if self.worker and self.worker.is_alive():
             if not messagebox.askokcancel("Automation đang chạy", "Đóng sau khi các Chrome được dọn dẹp?"):
                 return
+            self._persist_app_config()
             self.closing = True
+            if not self.worker.is_alive():
+                self.root.destroy()
+                return
             self._stop()
             self.root.withdraw()
             return
+        self._persist_app_config()
         self.root.destroy()
 
 

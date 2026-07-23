@@ -9,6 +9,11 @@ class UiModelsTests(unittest.TestCase):
         self.assertEqual(config.summary, "VIOTP: Đã kết nối · 125.000đ")
         self.assertNotIn(config.token, config.summary)
 
+    def test_viotp_summary_marks_restored_config(self) -> None:
+        config = ViotpConfig("secret-token", "VIETTEL", None)
+        self.assertEqual(config.summary, "VIOTP: Đã lưu · VIETTEL")
+        self.assertNotIn(config.token, config.summary)
+
     def test_calculates_result_stats(self) -> None:
         stats = calculate_stats(
             {

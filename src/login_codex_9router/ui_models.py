@@ -5,10 +5,12 @@ from dataclasses import dataclass
 class ViotpConfig:
     token: str
     network: str
-    balance: int | float
+    balance: int | float | None
 
     @property
     def summary(self) -> str:
+        if self.balance is None:
+            return f"VIOTP: Đã lưu · {self.network}"
         balance = f"{self.balance:,.0f}".replace(",", ".")
         return f"VIOTP: Đã kết nối · {balance}đ"
 
