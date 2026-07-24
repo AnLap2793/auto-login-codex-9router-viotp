@@ -3,7 +3,7 @@ import contextlib
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from playwright.async_api import BrowserContext, Page, Playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -146,8 +146,11 @@ async def _complete_openai_login(page: Page, account: Account, token: Cancellati
 
         email = await email_input(page, timeout=700)
         if email and not email_done:
-            await email.fill(account.email)
-            observer.clear()
+            await email.click()
+            await email.fill("")
+            await email.type(account.email, delay=30)
+            await page.wait_for_timeout(1000)
+            observer.start_step()
             await _click_continue(page)
             error = await _wait_after_submit(page, observer, token)
             if error:
@@ -157,7 +160,7 @@ async def _complete_openai_login(page: Page, account: Account, token: Cancellati
         password = await password_input(page, timeout=700)
         if password and not password_done:
             await password.fill(account.password)
-            observer.clear()
+            observer.start_step()
             await _click_continue(page)
             error = await _wait_after_submit(page, observer, token)
             if error:
@@ -172,25 +175,36 @@ async def _complete_openai_login(page: Page, account: Account, token: Cancellati
     raise FlowStopped(ResultCode.FAILED, "hết thời gian đăng nhập OpenAI")
 
 
-async def _open_oauth(context: BrowserContext, dashboard: Page) -> tuple[Page, str]:
-    await dashboard.route(
-        "**/api/oauth/codex/start-proxy*",
-        lambda route: route.fulfill(status=200, content_type="application/json", body='{"success":false}'),
-    )
-    add_button = dashboard.get_by_role("button", name=re.compile(r"^(Add|Add Connection)$"))
+async def _open_oauth(context: BrowserContext, host: str) -> tuple[Page, str]:
+    async def _fetch_api() -> dict[str, object]:
+        cookies = await context.cookies(host)
+        cookie_header = "; ".join(f"{c['name']}={c['value']}" for c in cookies) if cookies else ""
+
+        def _do_request() -> bytes:
+            import urllib.parse
+            import urllib.request
+            redirect_uri = urllib.parse.quote("http://localhost:1455/auth/callback", safe="")
+            req = urllib.request.Request(f"{host}/api/oauth/codex/authorize?redirect_uri={redirect_uri}")
+            if cookie_header:
+                req.add_header("Cookie", cookie_header)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.read()
+
+        data_bytes = await asyncio.to_thread(_do_request)
+        import json
+        return json.loads(data_bytes.decode())
+
     try:
-        async with context.expect_page(timeout=15_000) as popup_info, dashboard.expect_response(
-            lambda response: "/api/oauth/codex/authorize" in response.url
-        ) as response_info:
-            await add_button.first.click()
-        oauth_page = await popup_info.value
-        auth_data = await (await response_info.value).json()
-    except PlaywrightTimeoutError as error:
-        raise FlowStopped(ResultCode.FAILED, "9router không mở trang đăng nhập OpenAI") from error
+        auth_data = await _fetch_api()
+    except Exception as error:
+        raise FlowStopped(ResultCode.FAILED, f"không thể kết nối API 9router: {error}") from error
+
+    auth_url = auth_data.get("authUrl")
     state = auth_data.get("state")
-    if not state:
-        raise FlowStopped(ResultCode.FAILED, "9router không trả về OAuth state")
-    await oauth_page.wait_for_load_state("domcontentloaded")
+    if not isinstance(auth_url, str) or not isinstance(state, str) or not auth_url or not state:
+        raise FlowStopped(ResultCode.FAILED, "9router không trả về OAuth URL hoặc state")
+    oauth_page = await context.new_page()
+    await oauth_page.goto(auth_url, wait_until="domcontentloaded")
     return oauth_page, state
 
 
@@ -208,20 +222,30 @@ async def run_account(
     callback_state: str | None = None
     try:
         token.raise_if_cancelled()
-        browser = await playwright.chromium.launch(channel="chrome", headless=headless)
+        browser = await playwright.chromium.launch(
+            channel="chrome",
+            headless=headless,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
         context = await browser.new_context()
+        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         dashboard = await context.new_page()
         await dashboard.goto(f"{host}/dashboard/providers/codex", wait_until="domcontentloaded")
         await _login_dashboard(dashboard, dashboard_password, token)
-        if url_path(dashboard.url) != "/dashboard/providers/codex":
-            await dashboard.goto(f"{host}/dashboard/providers/codex", wait_until="domcontentloaded")
 
-        oauth_page, callback_state = await _open_oauth(context, dashboard)
+        oauth_page, callback_state = await _open_oauth(context, host)
         callback_server.expect(callback_state)
         callback_task = asyncio.create_task(callback_server.wait(callback_state))
         await _complete_openai_login(oauth_page, account, token)
         callback_url = await callback_task
         token.raise_if_cancelled()
+
+        callback_params = parse_qs(urlsplit(callback_url).query)
+        if callback_params.get("error"):
+            error_desc = callback_params.get("error_description", ["OAuth error"])[0]
+            raise FlowStopped(ResultCode.FAILED, f"OpenAI từ chối ủy quyền: {error_desc}")
+        if not callback_params.get("code"):
+            raise FlowStopped(ResultCode.FAILED, "callback thiếu mã ủy quyền OAuth")
 
         dialog = dashboard.get_by_role("dialog")
         await dialog.locator('input:not([readonly])').fill(callback_url)
@@ -241,6 +265,16 @@ async def run_account(
     finally:
         if callback_task and not callback_task.done():
             callback_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await callback_task
+        if callback_state:
+            callback_server.discard(callback_state)
+        if browser:
+            await browser.close()
+
+
+def url_path(url: str) -> str:
+    return urlsplit(url).path.rstrip("/") or "/"
             with contextlib.suppress(asyncio.CancelledError):
                 await callback_task
         if callback_state:

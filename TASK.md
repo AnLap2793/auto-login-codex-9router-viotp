@@ -2,9 +2,9 @@
 
 ## P0 — Luồng cốt lõi
 
-- [ ] Sửa `ResponseObserver` để quan sát HTTP `401/403/429` ở bước submit email và password.
-- [ ] Thêm integration test cho chuỗi callback OAuth → điền callback → Connect → success/failure.
-- [ ] Kiểm tra callback bắt buộc có `code` hoặc xử lý tham số OAuth `error`.
+- [x] Sửa `ResponseObserver` để quan sát HTTP `401/403/429` ở bước submit email và password.
+- [x] Thêm integration test cho chuỗi callback OAuth → điền callback → Connect → success/failure.
+- [x] Kiểm tra callback bắt buộc có `code` hoặc xử lý tham số OAuth `error`.
 - [ ] Chạy E2E được ủy quyền với 9router và tài khoản OpenAI thử nghiệm:
   - [ ] Dashboard login.
   - [ ] Mở OAuth popup và lấy `state`.

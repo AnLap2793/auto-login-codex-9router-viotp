@@ -11,55 +11,63 @@
 
 ## Chạy giao diện
 
-### Dành cho developer dùng Git Bash
+### Cách 1: Nhanh nhất (Tự động)
 
-Cài đặt và chạy lần đầu:
+Nhấp đúp `run.bat` trong thư mục dự án hoặc chạy từ Command Prompt / PowerShell:
+
+```cmd
+run.bat
+```
+
+Script sẽ tự động tạo `.venv`, cài đặt phụ thuộc và mở giao diện.
+
+---
+
+### Cách 2: Chạy trực tiếp bằng `py` (Không dùng `.venv`)
+
+Cài đặt 1 lần duy nhất vào Python hệ thống:
+
+```cmd
+py -m pip install -r requirements.txt
+py -m pip install -e .
+```
+
+Từ các lần sau, chạy trực tiếp bằng `py` hoặc `python`:
+
+```cmd
+py -m login_codex_9router.gui
+```
+
+---
+
+### Cách 3: Chạy thủ công với môi trường ảo `.venv`
+
+**Dùng Command Prompt / PowerShell:**
+
+```cmd
+# Lần đầu:
+py -3.11 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -e .
+.venv\Scripts\python.exe -m login_codex_9router.gui
+
+# Các lần sau:
+.venv\Scripts\python.exe -m login_codex_9router.gui
+```
+
+**Dùng Git Bash:**
 
 ```bash
+# Lần đầu:
 py -3.11 -m venv .venv
 source .venv/Scripts/activate
 python -m pip install -r requirements.txt
 python -m pip install -e .
 python -m login_codex_9router.gui
-```
 
-Các lần sau:
-
-```bash
+# Các lần sau:
 source .venv/Scripts/activate
 python -m login_codex_9router.gui
-```
-
-Có thể chạy trực tiếp mà không kích hoạt môi trường:
-
-```bash
-./.venv/Scripts/python.exe -m login_codex_9router.gui
-```
-
-### Cách nhanh nhất
-
-Nhấp đúp `run.bat` trong thư mục dự án. Lần chạy đầu, script dùng Python 3.11 để tạo `.venv`, cài `requirements.txt` rồi mở giao diện.
-
-Có thể chạy từ Command Prompt hoặc PowerShell tại thư mục dự án:
-
-```bat
-run.bat
-```
-
-### Chạy thủ công
-
-Dùng cách này khi cần xem lỗi trực tiếp trong terminal:
-
-```bat
-py -3.11 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe -m login_codex_9router.gui
-```
-
-Sau lần cài đầu, chỉ cần chạy:
-
-```bat
-.venv\Scripts\python.exe -m login_codex_9router.gui
 ```
 
 ### Sử dụng

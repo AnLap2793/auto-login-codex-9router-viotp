@@ -14,6 +14,8 @@ if importlib.util.find_spec("playwright"):
 class FixtureServer:
     def __init__(self) -> None:
         class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
             def do_GET(self) -> None:
                 if self.path == "/login":
                     self._html(
@@ -27,10 +29,11 @@ class FixtureServer:
                 elif self.path == "/oauth":
                     self._html("<h1>OAuth</h1>")
                 elif self.path.startswith("/api/oauth/codex/authorize"):
-                    body = b'{"state":"fixture-state"}'
+                    body = f'{{"authUrl":"http://127.0.0.1:{self.server.server_port}/oauth","state":"fixture-state"}}'.encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Connection", "close")
                     self.end_headers()
                     self.wfile.write(body)
                 else:
@@ -44,6 +47,7 @@ class FixtureServer:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -90,8 +94,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         with FixtureServer() as server:
             context = await self.browser.new_context()
             page = await context.new_page()
-            await page.goto(f"http://127.0.0.1:{server.port}/")
-            popup, state = await _open_oauth(context, page)
+            popup, state = await _open_oauth(context, f"http://127.0.0.1:{server.port}")
             self.assertEqual(state, "fixture-state")
             self.assertTrue(popup.url.endswith("/oauth"))
             await context.close()
@@ -132,7 +135,10 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
                 CancellationToken(),
                 headless=True,
             )
-        self.assertEqual(playwright.chromium.kwargs, {"channel": "chrome", "headless": True})
+        self.assertEqual(
+            playwright.chromium.kwargs,
+            {"channel": "chrome", "headless": True, "args": ["--disable-blink-features=AutomationControlled"]},
+        )
         self.assertEqual(result.code, ResultCode.FAILED)
 
 

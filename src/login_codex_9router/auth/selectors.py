@@ -3,13 +3,21 @@ import re
 from playwright.async_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
 
 
+import asyncio
+
+
 async def first_visible(*locators: Locator, timeout: int = 1_500) -> Locator | None:
-    for locator in locators:
-        try:
-            await locator.first.wait_for(state="visible", timeout=timeout)
-            return locator.first
-        except PlaywrightTimeoutError:
-            continue
+    deadline = asyncio.get_running_loop().time() + (timeout / 1000.0)
+    while True:
+        for locator in locators:
+            try:
+                if await locator.first.is_visible():
+                    return locator.first
+            except Exception:
+                continue
+        if asyncio.get_running_loop().time() >= deadline:
+            break
+        await asyncio.sleep(0.05)
     return None
 
 
@@ -57,6 +65,12 @@ async def blocker(page: Page) -> str | None:
     body = (await page.locator("body").inner_text(timeout=2_000)).lower()
     if await page.locator('input[type="tel"]').count() or "phone verification" in body:
         return "phone"
-    if "captcha" in url or "challenge" in url or "verify you are human" in body:
+    if (
+        "captcha" in url
+        or "challenge" in url
+        or "verify you are human" in body
+        or "just a moment" in body
+        or "oops, an error occurred" in body
+    ):
         return "captcha"
     return None

@@ -20,6 +20,7 @@ class CallbackServer:
                     valid = (
                         parsed.path in {"/callback", "/auth/callback"}
                         and state in owner._expected_states
+                        and bool(params.get("code") or params.get("error"))
                     )
                     if valid:
                         owner._callbacks[state] = f"http://localhost:{owner.port}{self.path}"

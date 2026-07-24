@@ -32,8 +32,9 @@ class ResponseObserver:
             return
         values: list[str] = []
         content_type = response.headers.get("content-type", "").lower()
-        content_length = int(response.headers.get("content-length", "0") or 0)
-        if "application/json" in content_type and 0 < content_length <= 32_768:
+        raw_length = response.headers.get("content-length", "")
+        content_length = int(raw_length) if raw_length.isdigit() else None
+        if "application/json" in content_type and (content_length is None or 0 < content_length <= 32_768):
             try:
                 payload = await response.json()
                 if isinstance(payload, dict):
@@ -43,6 +44,8 @@ class ResponseObserver:
                         values.extend(self._safe_values(error))
             except Exception:
                 pass
+        if "text/html" in content_type and response.status in {401, 403}:
+            return
         signal = classify_response(response.status, tuple(values))
         if signal:
             self._signals.put_nowait(signal)
