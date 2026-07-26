@@ -40,7 +40,30 @@ Trong đó:
 - Mỗi worker sở hữu một tiến trình Chrome và xử lý trọn vẹn một tài khoản, gồm đăng nhập và 2FA; xác minh điện thoại dừng để xử lý thủ công.
 - Cookie, session và dữ liệu đăng nhập của từng tài khoản phải được cô lập hoàn toàn.
 - Luôn đóng trang, context và tiến trình Chrome của tài khoản trong khối dọn dẹp, kể cả khi lỗi hoặc timeout.
-- Mỗi tài khoản có timeout, retry có giới hạn và trạng thái độc lập: `pending`, `running`, `success` hoặc `failed`.
+- Mỗi tài khoản có timeout, retry có giới hạn và trạng thái độc lập.
+
+Trạng thái vòng đời: `pending`, `running`, `waiting_manual`, `success`, `cancelled`.
+
+`waiting_manual` là trạng thái tạm khi đang chờ người dùng tự xử lý CAPTCHA hoặc xác minh
+điện thoại. Không tính là lỗi trong thống kê.
+
+Trạng thái kết thúc do lỗi, dùng thay cho `failed` khi phân loại được nguyên nhân:
+
+| Mã | Nghĩa |
+|----|-------|
+| `failed` | Lỗi không phân loại được, hoặc hết thời gian |
+| `dashboard_auth_required` | 9router bật đăng nhập nhưng chưa nhập mật khẩu dashboard |
+| `dashboard_auth_failed` | Sai mật khẩu dashboard, dashboard bị khóa, hoặc OIDC-only |
+| `captcha_required` | Gặp CAPTCHA, dừng để xử lý thủ công |
+| `phone_verification_required` | Gặp xác minh điện thoại, dừng để xử lý thủ công |
+| `invalid_email` | Email hoặc tài khoản không tồn tại |
+| `invalid_password` | Sai mật khẩu OpenAI |
+| `account_locked` | Tài khoản bị khóa hoặc tạm ngưng |
+| `account_disabled` | Tài khoản đã bị vô hiệu hóa |
+| `rate_limited` | OpenAI giới hạn yêu cầu; không tự động thử lại |
+| `invalid_otp` | Mã TOTP sai; kiểm tra lại khóa 2FA |
+| `expired_otp` | Mã TOTP hết hạn cả hai lần thử |
+| `login_rejected` | OpenAI từ chối đăng nhập (HTTP 401/403) |
 - Kết quả phải giữ liên kết với số dòng đầu vào nhưng không ghi mật khẩu, khóa 2FA hoặc OTP vào log.
 - Chỉ chạy đồng thời các tài khoản mà người dùng có quyền quản lý; không dùng đa luồng để né rate limit hoặc cơ chế chống lạm dụng.
 
@@ -55,9 +78,13 @@ Trong đó:
    - Chờ sang chu kỳ mới nếu mã hiện tại sắp hết hạn.
    - Nhập mã vào trang xác minh; khóa 2FA không rời khỏi máy.
 6. Khi OpenAI yêu cầu xác minh số điện thoại:
-   - Dừng luồng tự động và báo `phone_verification_required`.
    - Không thuê số, không dùng số tạm và không tự động vượt bước xác minh.
-7. Khi CAPTCHA xuất hiện, dừng và báo `captcha_required`.
+   - Chế độ hiển thị: giữ cửa sổ Chrome mở, báo trạng thái `waiting_manual` và chờ người dùng
+     tự nhập số của họ cùng mã xác minh. Qua được thì chạy tiếp; hết thời gian chờ thì báo
+     `phone_verification_required`.
+   - Chế độ chạy ẩn: không có cửa sổ để thao tác nên dừng ngay và báo `phone_verification_required`.
+7. Khi CAPTCHA xuất hiện, xử lý y hệt bước 6 nhưng mã kết thúc là `captcha_required`.
+   Ứng dụng không triển khai bất kỳ cơ chế tự vượt CAPTCHA nào.
 8. Chờ 9router hoàn tất liên kết tài khoản và xác nhận kết quả.
 9. Phân loại lỗi đăng nhập: email sai, mật khẩu sai, tài khoản khóa/vô hiệu hóa, rate limit, OTP sai hoặc hết hạn.
 10. Chỉ retry OTP hết hạn tối đa một lần; các lỗi xác thực khác dừng ngay.

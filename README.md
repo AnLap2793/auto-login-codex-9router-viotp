@@ -19,7 +19,9 @@ Nhấp đúp `run.bat` trong thư mục dự án hoặc chạy từ Command Prom
 run.bat
 ```
 
-Script sẽ tự động tạo `.venv`, cài đặt phụ thuộc và mở giao diện.
+Script tạo `.venv` nếu chưa có, chạy `pip install -e .` (kéo theo Playwright khai báo trong
+`pyproject.toml`) rồi mở giao diện bằng `pythonw`. Script này **không** cài `requirements.txt`
+và không chạy test — muốn cài đầy đủ cả PyInstaller thì dùng `build.bat`.
 
 ---
 
@@ -75,8 +77,13 @@ python -m login_codex_9router.gui
 1. Đảm bảo 9router đang chạy, sau đó nhập `9router HOST`, ví dụ `http://localhost:20127`.
 2. Nhập mật khẩu dashboard nếu 9router bật đăng nhập. Mật khẩu được Windows DPAPI bảo vệ trước khi lưu.
 3. Chọn chế độ Chrome:
-   - **Hiển thị**: phù hợp khi cần xử lý CAPTCHA hoặc xác minh thủ công.
-   - **Chạy ẩn**: không mở cửa sổ Chrome nhưng khó xử lý các bước xác minh thủ công.
+   - **Hiển thị**: gặp CAPTCHA hoặc xác minh điện thoại thì ứng dụng **giữ cửa sổ Chrome mở
+     và chờ bạn tự xử lý** (mặc định 5 phút). Xong thì tự chạy tiếp.
+   - **Chạy ẩn**: không có cửa sổ để thao tác nên dừng ngay khi gặp các bước này.
+
+   Ứng dụng không tự vượt CAPTCHA hay xác minh điện thoại: bạn nhập số của mình và mã xác minh
+   bằng tay trong cửa sổ đó. Hết thời gian chờ thì tài khoản dừng với trạng thái
+   `captcha_required` / `phone_verification_required`, các tài khoản khác không bị ảnh hưởng.
 4. Nhấn **Cấu hình VIOTP** ở góc trên bên phải. Trong modal, nhập token rồi nhấn **Kiểm tra kết nối**; chọn một nhà mạng hoặc giữ **Tất cả nhà mạng**, sau đó nhấn **Lưu cấu hình**.
 5. Header chỉ hiển thị trạng thái và số dư VIOTP. Dịch vụ mặc định là **OpenAI | ChatGPT** (`id=1234`, giá `2.900đ`). Token VIOTP được Windows DPAPI bảo vệ trước khi lưu.
 6. Dán tài khoản hoặc nhấn **Chọn file .txt**. Mỗi tài khoản nằm trên một dòng:
@@ -86,6 +93,9 @@ email|password|2fa_secret
 ```
 
 7. Nhấn **Bắt đầu kết nối** và theo dõi bảng trạng thái. Nút **Dừng** hủy các task và đóng toàn bộ Chrome do ứng dụng mở.
+8. Khi một dòng chuyển sang `waiting_manual`, mở cửa sổ Chrome của tài khoản đó và hoàn tất
+   bước xác minh. Nếu muốn bỏ qua tài khoản này mà vẫn để các tài khoản khác chạy, chọn dòng
+   đó rồi nhấn **Bỏ qua tài khoản đang chọn**.
 
 Không commit file tài khoản. `.gitignore` loại trừ `accounts*.txt` và `credentials*.txt`.
 
@@ -133,8 +143,9 @@ docs/                      Tài liệu dự án và API
 Nhấp đúp `build.bat`. Script sẽ:
 
 1. Tạo `.venv`.
-2. Cài `requirements.txt`.
-3. Chạy compile và unit test.
+2. Cài `requirements.txt` và `pip install -e .`.
+3. Chạy `compileall` và **toàn bộ** test (`unittest discover -s tests`), gồm cả integration
+   test dùng Chrome. Test fail thì build dừng.
 4. Tạo `dist\login-codex-9router.exe` bằng PyInstaller.
 
 EXE không bundle Chrome; máy chạy vẫn phải có Google Chrome.
@@ -162,7 +173,8 @@ python -m login_codex_9router accounts.txt --headless
 
 ## Giới hạn hiện tại
 
-- Dừng và báo trạng thái khi gặp CAPTCHA hoặc xác minh điện thoại; không tự động vượt các bước này.
+- Không tự động vượt CAPTCHA hay xác minh điện thoại. Ở chế độ Hiển thị, ứng dụng chờ bạn tự
+  xử lý trong cửa sổ Chrome; hết giờ hoặc chạy ẩn thì dừng và báo trạng thái.
 - Cấu hình VIOTP hiện chỉ kiểm tra token, số dư và nhà mạng; chưa tự động thuê số hoặc lấy OTP điện thoại.
 - Mã TOTP được tạo cục bộ theo RFC 6238; khóa 2FA không rời khỏi máy.
 - Dashboard OIDC-only và luồng bắt buộc đổi mật khẩu cần xử lý thủ công.
