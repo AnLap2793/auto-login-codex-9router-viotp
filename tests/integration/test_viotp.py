@@ -4,7 +4,14 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from login_codex_9router.integrations.viotp import OPENAI_SERVICE, ViotpError, get_balance, get_networks
+from login_codex_9router.integrations.viotp import (
+    OPENAI_SERVICE,
+    ViotpError,
+    get_balance,
+    get_networks,
+    get_services,
+    resolve_openai_service,
+)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -100,6 +107,95 @@ class ViotpTests(unittest.TestCase):
             (OPENAI_SERVICE.id, OPENAI_SERVICE.name, OPENAI_SERVICE.price),
             (1234, "OpenAI | ChatGPT", 2900),
         )
+
+    def test_gets_services_and_sends_country(self) -> None:
+        _Handler.routes["/service/getv2"] = {
+            "status_code": 200,
+            "success": True,
+            "data": [{"id": 7, "name": "Facebook", "price": 800}, {"id": 1234, "name": "OpenAI", "price": 3500}],
+        }
+
+        services = get_services("token", base_url=self.base_url)
+
+        self.assertEqual([(s.id, s.name, s.price) for s in services], [(7, "Facebook", 800), (1234, "OpenAI", 3500)])
+        self.assertEqual(_Handler.queries[0]["country"], ["vn"])
+
+    def test_accepts_price_returned_as_string(self) -> None:
+        # Tài liệu VIOTP ghi price là số nhưng ví dụ trả về lại là chuỗi.
+        _Handler.routes["/service/getv2"] = {
+            "status_code": 200,
+            "success": True,
+            "data": [{"id": 1, "name": "Momo", "price": "350"}],
+        }
+
+        services = get_services("token", base_url=self.base_url)
+
+        self.assertEqual(services[0].price, 350)
+
+    def test_skips_malformed_service_entries(self) -> None:
+        _Handler.routes["/service/getv2"] = {
+            "status_code": 200,
+            "success": True,
+            "data": [
+                {"id": "khong-phai-so", "name": "Xau", "price": 100},
+                {"id": 5, "name": 123, "price": 100},
+                {"id": 6, "name": "Thieu gia"},
+                {"id": 9, "name": "Hop le", "price": 700},
+            ],
+        }
+
+        services = get_services("token", base_url=self.base_url)
+
+        self.assertEqual([(s.id, s.name, s.price) for s in services], [(9, "Hop le", 700)])
+
+    def test_rejects_service_list_without_any_valid_entry(self) -> None:
+        for payload in ({"status_code": 200, "success": True, "data": []},
+                        {"status_code": 200, "success": True, "data": {"id": 1}}):
+            with self.subTest(payload=payload):
+                _Handler.routes["/service/getv2"] = payload
+                with self.assertRaisesRegex(ViotpError, "danh sách dịch vụ"):
+                    get_services("token", base_url=self.base_url)
+
+    def test_resolves_openai_service_price_at_runtime(self) -> None:
+        _Handler.routes["/service/getv2"] = {
+            "status_code": 200,
+            "success": True,
+            "data": [{"id": 1234, "name": "OpenAI | ChatGPT", "price": 3500}],
+        }
+
+        service, warning = resolve_openai_service("token", base_url=self.base_url)
+
+        self.assertEqual(service.price, 3500, "phải dùng giá từ API, không phải hằng số 2900")
+        self.assertIsNone(warning)
+
+    def test_falls_back_with_warning_when_service_id_missing(self) -> None:
+        _Handler.routes["/service/getv2"] = {
+            "status_code": 200,
+            "success": True,
+            "data": [{"id": 7, "name": "Facebook", "price": 800}],
+        }
+
+        service, warning = resolve_openai_service("token", base_url=self.base_url)
+
+        self.assertEqual(service, OPENAI_SERVICE)
+        self.assertIn("1234", warning)
+
+    def test_falls_back_with_warning_when_lookup_fails(self) -> None:
+        service, warning = resolve_openai_service("token", base_url="http://127.0.0.1:1", timeout=0.1)
+
+        self.assertEqual(service, OPENAI_SERVICE)
+        self.assertIn("không tra được", warning)
+
+    def test_service_lookup_never_exposes_token(self) -> None:
+        _Handler.routes["/service/getv2"] = {
+            "status_code": -1,
+            "success": False,
+            "message": "loi voi secret-value",
+        }
+
+        _, warning = resolve_openai_service("secret-value", base_url=self.base_url)
+
+        self.assertNotIn("secret-value", warning)
 
 
 if __name__ == "__main__":

@@ -5,8 +5,20 @@ from collections.abc import Callable
 from tkinter import messagebox, ttk
 
 from .config import DEFAULT_NETWORK
-from .integrations.viotp import OPENAI_SERVICE, ViotpError, get_balance, get_networks
+from .integrations.viotp import (
+    OPENAI_SERVICE,
+    Service,
+    ViotpError,
+    get_balance,
+    get_networks,
+    resolve_openai_service,
+)
 from .ui_models import ViotpConfig
+
+
+def _format_service(service: Service, warning: str | None = None) -> str:
+    text = f"{service.name} · ID {service.id} · {service.price:,.0f}đ".replace(",", ".")
+    return f"{text} (mặc định — {warning})" if warning else text
 
 
 class ViotpConfigOverlay(ttk.Frame):
@@ -75,12 +87,11 @@ class ViotpConfigOverlay(ttk.Frame):
         self.network.pack(fill="x", pady=(6, 12), ipady=4)
         self.network.set(current_network)
 
-        service = (
-            f"{OPENAI_SERVICE.name} · ID {OPENAI_SERVICE.id} · "
-            f"{OPENAI_SERVICE.price:,.0f}đ"
-        ).replace(",", ".")
         ttk.Label(card, text="Dịch vụ", style="Modal.TLabel").pack(anchor="w")
-        ttk.Label(card, text=service, style="ModalHint.TLabel").pack(anchor="w", pady=(5, 18))
+        self.service_label = ttk.Label(
+            card, text=_format_service(OPENAI_SERVICE), style="ModalHint.TLabel"
+        )
+        self.service_label.pack(anchor="w", pady=(5, 18))
 
         actions = ttk.Frame(card, style="Modal.TFrame")
         actions.pack(fill="x", side="bottom")
@@ -138,7 +149,10 @@ class ViotpConfigOverlay(ttk.Frame):
         try:
             balance = get_balance(token)
             networks = tuple(network.name for network in get_networks(token))
-            self.events.put(("ok", token, balance, networks))
+            # Tra dịch vụ ở runtime: giá VIOTP đổi theo thời gian nên hằng số hiển thị
+            # có thể đã lỗi thời. Lỗi ở bước này không làm hỏng cả lần kiểm tra.
+            service, warning = resolve_openai_service(token)
+            self.events.put(("ok", token, balance, networks, service, warning))
         except ViotpError as error:
             self.events.put(("error", token, str(error)))
 
@@ -163,6 +177,7 @@ class ViotpConfigOverlay(ttk.Frame):
             self.network.set(DEFAULT_NETWORK)
             self.verified = ViotpConfig(event[1], DEFAULT_NETWORK, event[2])
             self.status.configure(text=self.verified.summary)
+            self.service_label.configure(text=_format_service(event[4], event[5]))
             self.save_button.configure(state="normal")
         self.after(100, self._drain_events)
 

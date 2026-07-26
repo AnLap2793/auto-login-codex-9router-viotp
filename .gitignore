@@ -9,3 +9,5 @@ src/*.egg-info/
 accounts*.txt
 credentials*.txt
 .env
+repomix-output.xml
+.claude/agent-memory/

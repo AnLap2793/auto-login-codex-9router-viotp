@@ -1,4 +1,10 @@
+"""Cửa sổ chính: gắn command vào widget, chạy automation trong thread nền.
+
+Bố cục widget nằm ở `main_window_layout`, style ở `theme`.
+"""
+
 import asyncio
+import os
 import queue
 import threading
 import tkinter as tk
@@ -6,6 +12,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from .accounts import parse_accounts
+from .auth.results import WAITING_MANUAL_STATUS
 from .cancellation import CancellationToken
 from .config import (
     DEFAULT_NETWORK,
@@ -15,9 +22,16 @@ from .config import (
     normalize_host,
     save_config,
 )
+from .main_window_layout import build_main_window
 from .runner import StatusUpdate, run_text
+from .theme import BACKGROUND, configure_style
 from .ui_models import ViotpConfig, calculate_stats
 from .viotp_dialog import ViotpConfigOverlay
+
+NO_VIOTP_SUMMARY = "VIOTP: Chưa cấu hình"
+
+# Sau khi nhấn Dừng, chờ tối đa ngần này rồi thoát cưỡng bức nếu Playwright treo.
+CLEANUP_TIMEOUT_MS = 30_000
 
 
 class Application:
@@ -33,16 +47,18 @@ class Application:
             else None
         )
         self.viotp_dialog: ViotpConfigOverlay | None = None
+        self.viotp_backdrop: ttk.Frame | None = None
         self.statuses: dict[int, str] = {}
+        self.account_tokens: dict[int, CancellationToken] = {}
         self.closing = False
         self.running = False
 
         root.title("9Router · Codex Account Connector")
         root.geometry("1100x760")
         root.minsize(960, 680)
-        root.configure(bg="#f4f1ea")
+        root.configure(bg=BACKGROUND)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._configure_style()
+        configure_style()
         self._build()
         if config_error:
             root.after_idle(
@@ -54,149 +70,70 @@ class Application:
             )
         root.after(100, self._drain_events)
 
-    def _configure_style(self) -> None:
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("TFrame", background="#f4f1ea")
-        style.configure("TLabel", background="#f4f1ea", foreground="#20251f", font=("Segoe UI", 10))
-        style.configure("Title.TLabel", font=("Segoe UI Semibold", 20))
-        style.configure("Section.TLabel", font=("Segoe UI Semibold", 11))
-        style.configure("Hint.TLabel", foreground="#60675e")
-        style.configure("Accent.TButton", background="#245c45", foreground="white", padding=(18, 10))
-        style.map("Accent.TButton", background=[("active", "#194b37"), ("disabled", "#9aa69f")])
-        style.configure("TButton", padding=(14, 9))
-        style.configure("Treeview", rowheight=28, background="#fffdf8", fieldbackground="#fffdf8")
-        style.configure("Treeview.Heading", font=("Segoe UI Semibold", 9), padding=6)
-        style.configure("Overlay.TFrame", background="#d4d1ca")
-        style.configure("Modal.TFrame", background="#fffdf8", relief="solid", borderwidth=1)
-        style.configure("Modal.TLabel", background="#fffdf8", foreground="#20251f", font=("Segoe UI", 10))
-        style.configure("ModalTitle.TLabel", background="#fffdf8", foreground="#20251f", font=("Segoe UI Semibold", 18))
-        style.configure("ModalHint.TLabel", background="#fffdf8", foreground="#60675e")
-
     def _build(self) -> None:
-        outer = ttk.Frame(self.root, padding=22)
-        outer.grid(sticky="nsew")
-        self.root.rowconfigure(0, weight=1)
-        self.root.columnconfigure(0, weight=1)
-        outer.columnconfigure(0, weight=4)
-        outer.columnconfigure(1, weight=6)
-        outer.rowconfigure(4, weight=1)
+        summary_text = self.viotp_config.summary if self.viotp_config else NO_VIOTP_SUMMARY
+        widgets = build_main_window(self.root, self.app_config, summary_text, self._stats_text())
+        self.host = widgets.host
+        self.dashboard_password = widgets.dashboard_password
+        self.browser_mode = widgets.browser_mode
+        self.visible_mode = widgets.visible_mode
+        self.headless_mode = widgets.headless_mode
+        self.accounts = widgets.accounts
+        self.account_count = widgets.account_count
+        self.choose_button = widgets.choose_button
+        self.clear_button = widgets.clear_button
+        self.viotp_summary = widgets.viotp_summary
+        self.viotp_button = widgets.viotp_button
+        self.start_button = widgets.start_button
+        self.stop_button = widgets.stop_button
+        self.skip_button = widgets.skip_button
+        self.summary = widgets.summary
+        self.stats_label = widgets.stats_label
+        self.results = widgets.results
 
-        header = ttk.Frame(outer)
-        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 18))
-        header.columnconfigure(0, weight=1)
-        title = ttk.Frame(header)
-        title.grid(row=0, column=0, sticky="w")
-        ttk.Label(title, text="Codex Account Connector", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(
-            title,
-            text="Mỗi tài khoản chạy trong một tiến trình Google Chrome riêng.",
-            style="Hint.TLabel",
-        ).pack(anchor="w", pady=(3, 0))
-        settings = ttk.Frame(header)
-        settings.grid(row=0, column=1, sticky="e")
-        viotp_summary = self.viotp_config.summary if self.viotp_config else "VIOTP: Chưa cấu hình"
-        self.viotp_summary = ttk.Label(settings, text=viotp_summary, style="Hint.TLabel")
-        self.viotp_summary.pack(side="left", padx=(0, 10))
-        self.viotp_button = ttk.Button(settings, text="Cấu hình VIOTP", command=self._open_viotp)
-        self.viotp_button.pack(side="left")
-
-        connection = ttk.LabelFrame(outer, text="1. Cấu hình kết nối", padding=16)
-        connection.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
-        ttk.Label(connection, text="9router HOST").pack(anchor="w")
-        self.host = ttk.Entry(connection, font=("Segoe UI", 11))
-        self.host.insert(0, self.app_config.host)
-        self.host.pack(fill="x", pady=(6, 13), ipady=7)
-        ttk.Label(connection, text="Mật khẩu dashboard (nếu bật đăng nhập)").pack(anchor="w")
-        self.dashboard_password = ttk.Entry(connection, font=("Segoe UI", 11), show="•")
-        self.dashboard_password.insert(0, self.app_config.dashboard_password)
-        self.dashboard_password.pack(fill="x", pady=(6, 14), ipady=7)
-        ttk.Label(connection, text="Chế độ Chrome").pack(anchor="w")
-        mode = ttk.Frame(connection)
-        mode.pack(fill="x", pady=(6, 3))
-        self.browser_mode = tk.StringVar(value=self.app_config.browser_mode)
-        self.visible_mode = ttk.Radiobutton(mode, text="Hiển thị", value="visible", variable=self.browser_mode)
-        self.visible_mode.pack(side="left")
-        self.headless_mode = ttk.Radiobutton(mode, text="Chạy ẩn", value="headless", variable=self.browser_mode)
-        self.headless_mode.pack(side="left", padx=(12, 0))
-        ttk.Label(
-            connection,
-            text="Chạy ẩn không phù hợp khi cần CAPTCHA hoặc xác minh thủ công.",
-            style="Hint.TLabel",
-            wraplength=360,
-        ).pack(anchor="w", pady=(5, 0))
-
-        accounts_frame = ttk.LabelFrame(outer, text="2. Danh sách tài khoản", padding=16)
-        accounts_frame.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
-        accounts_frame.columnconfigure(0, weight=1)
-        accounts_frame.rowconfigure(1, weight=1)
-        account_header = ttk.Frame(accounts_frame)
-        account_header.grid(row=0, column=0, sticky="ew", pady=(0, 7))
-        ttk.Label(account_header, text="Mỗi dòng: email|password|2fa_secret", style="Hint.TLabel").pack(side="left")
-        self.account_count = ttk.Label(account_header, text="0 tài khoản")
-        self.account_count.pack(side="right")
-        self.accounts = tk.Text(
-            accounts_frame,
-            height=9,
-            wrap="none",
-            font=("Consolas", 10),
-            bg="#fffdf8",
-            fg="#20251f",
-            insertbackground="#20251f",
-            relief="solid",
-            borderwidth=1,
-            padx=10,
-            pady=10,
-        )
-        self.accounts.grid(row=1, column=0, sticky="nsew")
+        self.viotp_button.configure(command=self._open_viotp)
+        self.choose_button.configure(command=self._choose_file)
+        self.clear_button.configure(command=self._clear_accounts)
+        self.start_button.configure(command=self._start)
+        self.stop_button.configure(command=self._stop)
+        self.skip_button.configure(command=self._skip_selected)
         self.accounts.bind("<KeyRelease>", self._update_account_count)
-        account_actions = ttk.Frame(accounts_frame)
-        account_actions.grid(row=2, column=0, sticky="ew", pady=(9, 0))
-        self.choose_button = ttk.Button(account_actions, text="Chọn file .txt", command=self._choose_file)
-        self.choose_button.pack(side="left")
-        self.clear_button = ttk.Button(account_actions, text="Xóa danh sách", command=self._clear_accounts)
-        self.clear_button.pack(side="left", padx=(8, 0))
-
-        actions = ttk.Frame(outer)
-        actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=14)
-        self.start_button = ttk.Button(actions, text="Bắt đầu kết nối", style="Accent.TButton", command=self._start)
-        self.start_button.pack(side="left")
-        self.stop_button = ttk.Button(actions, text="Dừng", command=self._stop, state="disabled")
-        self.stop_button.pack(side="left", padx=(8, 0))
-        self.summary = ttk.Label(actions, text="Sẵn sàng", style="Hint.TLabel")
-        self.summary.pack(side="left", padx=14)
-
-        results_header = ttk.Frame(outer)
-        results_header.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 7))
-        ttk.Label(results_header, text="3. Kết quả", style="Section.TLabel").pack(side="left")
-        self.stats_label = ttk.Label(results_header, text=self._stats_text(), style="Hint.TLabel")
-        self.stats_label.pack(side="right")
-        columns = ("line", "account", "status", "detail")
-        self.results = ttk.Treeview(outer, columns=columns, show="headings")
-        headings = {"line": "Dòng", "account": "Tài khoản", "status": "Trạng thái", "detail": "Chi tiết"}
-        widths = {"line": 55, "account": 250, "status": 150, "detail": 480}
-        for column in columns:
-            self.results.heading(column, text=headings[column])
-            self.results.column(column, width=widths[column], minwidth=widths[column], stretch=column == "detail")
-        self.results.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        self.results.bind("<<TreeviewSelect>>", self._refresh_skip_button)
 
     def _open_viotp(self) -> None:
         if self.viotp_dialog and self.viotp_dialog.winfo_exists():
             self.viotp_dialog.lift()
             return
-        self.viotp_dialog = ViotpConfigOverlay(
-            self.root,
-            self.viotp_config,
-            self._save_viotp,
-            self._close_viotp,
-        )
+        # Dọn backdrop cũ trước: nếu overlay lần trước chết mà không gọi on_close thì
+        # backdrop còn sót lại sẽ phủ kín cửa sổ và nuốt mọi thao tác chuột.
+        self._destroy_backdrop()
+        # Backdrop phủ kín cửa sổ để modal tách bạch về thị giác; grab_set của overlay
+        # mới là thứ thực sự chặn tương tác.
+        self.viotp_backdrop = ttk.Frame(self.root, style="Overlay.TFrame")
+        self.viotp_backdrop.place(x=0, y=0, relwidth=1, relheight=1)
+        try:
+            self.viotp_dialog = ViotpConfigOverlay(
+                self.root,
+                self.viotp_config,
+                self._save_viotp,
+                self._close_viotp,
+            )
+        except BaseException:
+            self._destroy_backdrop()
+            raise
+
+    def _destroy_backdrop(self) -> None:
+        if self.viotp_backdrop is not None:
+            self.viotp_backdrop.destroy()
+            self.viotp_backdrop = None
 
     def _close_viotp(self) -> None:
+        self._destroy_backdrop()
         self.viotp_dialog = None
 
     def _save_viotp(self, config: ViotpConfig) -> None:
         self.viotp_config = config if config.token else None
-        summary = self.viotp_config.summary if self.viotp_config else "VIOTP: Chưa cấu hình"
+        summary = self.viotp_config.summary if self.viotp_config else NO_VIOTP_SUMMARY
         self.viotp_summary.configure(text=summary)
         self._persist_app_config()
 
@@ -209,7 +146,9 @@ class Application:
             viotp_network=self.viotp_config.network if self.viotp_config else DEFAULT_NETWORK,
         )
 
-    def _persist_app_config(self, config: AppConfig | None = None, context: str = "Cấu hình vẫn dùng được trong phiên này") -> None:
+    def _persist_app_config(
+        self, config: AppConfig | None = None, context: str = "Cấu hình vẫn dùng được trong phiên này"
+    ) -> None:
         try:
             config = config or self._collect_app_config()
             if config != self.app_config:
@@ -257,6 +196,7 @@ class Application:
         for item in self.results.get_children():
             self.results.delete(item)
         self.statuses.clear()
+        self.account_tokens.clear()
         self._update_stats()
         password = config.dashboard_password or None
         headless = config.browser_mode == "headless"
@@ -272,8 +212,21 @@ class Application:
     def _run_worker(
         self, text: str, host: str, password: str | None, headless: bool, cancellation: CancellationToken
     ) -> None:
+        def on_account_start(line_number: int, token: CancellationToken) -> None:
+            self.events.put(("account_token", line_number, token))
+
         try:
-            asyncio.run(run_text(text, host, self.events.put, cancellation, password, headless))
+            asyncio.run(
+                run_text(
+                    text,
+                    host,
+                    self.events.put,
+                    cancellation,
+                    password,
+                    headless,
+                    on_account_start=on_account_start,
+                )
+            )
             self.events.put(("done", "Hoàn tất"))
         except Exception as error:
             self.events.put(("error", str(error) or type(error).__name__))
@@ -295,25 +248,44 @@ class Application:
                     self.results.insert("", "end", iid=item, values=values)
                 self.statuses[event.line_number] = str(event.status)
                 self._update_stats()
+                self._refresh_skip_button()
                 self.summary.configure(text=f"Dòng {event.line_number}: {event.status}")
+            elif event[0] == "account_token":
+                self.account_tokens[event[1]] = event[2]
+                self._refresh_skip_button()
             elif event[0] == "error":
-                self._set_running(False)
                 if not self.closing:
                     messagebox.showerror("Không thể chạy", event[1])
             elif event[0] == "done":
+                self.summary.configure(text=self._completion_text())
+            elif event[0] == "worker_stopped":
+                # Mở khóa tại đây chứ không ở "done"/"error": nếu worker chết vì một
+                # BaseException (CancelledError, SystemExit) thì hai nhánh kia không chạy
+                # và giao diện sẽ kẹt ở trạng thái disabled vĩnh viễn.
                 self._set_running(False)
-                self.summary.configure(text=event[1])
-            elif event[0] == "worker_stopped" and self.closing:
-                self.root.destroy()
-                return
+                if self.closing:
+                    self.root.destroy()
+                    return
         self.root.after(100, self._drain_events)
+
+    def _completion_text(self) -> str:
+        stats = calculate_stats(self.statuses)
+        if not stats.total:
+            return "Không có tài khoản nào để chạy"
+        parts = [f"thành công {stats.success}/{stats.total}"]
+        if stats.failed:
+            parts.append(f"thất bại {stats.failed}")
+        if stats.cancelled:
+            parts.append(f"đã dừng {stats.cancelled}")
+        return "Hoàn tất · " + " · ".join(parts)
 
     def _stats_text(self) -> str:
         stats = calculate_stats(self.statuses)
-        return (
+        text = (
             f"Tổng {stats.total}   Đang chạy {stats.running}   Thành công {stats.success}   "
             f"Thất bại {stats.failed}   Đã dừng {stats.cancelled}"
         )
+        return f"{text}   Chờ xác minh {stats.waiting}" if stats.waiting else text
 
     def _update_stats(self) -> None:
         self.stats_label.configure(text=self._stats_text())
@@ -331,6 +303,7 @@ class Application:
         self.viotp_button.configure(state=state)
         self.start_button.configure(state=state)
         self.stop_button.configure(state="normal" if running else "disabled")
+        self._refresh_skip_button()
         if running:
             self.summary.configure(text="Đang khởi chạy Chrome…")
 
@@ -338,7 +311,37 @@ class Application:
         if self.cancellation:
             self.cancellation.cancel()
         self.stop_button.configure(state="disabled")
+        self.skip_button.configure(state="disabled")
         self.summary.configure(text="Đang dọn Chrome…")
+
+    def _selected_line(self) -> int | None:
+        selection = self.results.selection()
+        if not selection:
+            return None
+        try:
+            return int(selection[0])
+        except ValueError:
+            return None
+
+    def _refresh_skip_button(self, _event: tk.Event | None = None) -> None:
+        """Chỉ cho bỏ qua tài khoản đang chạy hoặc đang chờ xác minh; đã xong thì vô nghĩa."""
+        line = self._selected_line()
+        active = (
+            self.running
+            and line is not None
+            and line in self.account_tokens
+            and self.statuses.get(line) in {"running", WAITING_MANUAL_STATUS}
+        )
+        self.skip_button.configure(state="normal" if active else "disabled")
+
+    def _skip_selected(self) -> None:
+        line = self._selected_line()
+        token = self.account_tokens.get(line) if line is not None else None
+        if token is None:
+            return
+        token.cancel()
+        self.skip_button.configure(state="disabled")
+        self.summary.configure(text=f"Đang bỏ qua dòng {line}…")
 
     def _on_close(self) -> None:
         if self.worker and self.worker.is_alive():
@@ -351,9 +354,17 @@ class Application:
                 return
             self._stop()
             self.root.withdraw()
+            self.root.after(CLEANUP_TIMEOUT_MS, self._force_close)
             return
         self._persist_app_config()
         self.root.destroy()
+
+    def _force_close(self) -> None:
+        """Thoát cưỡng bức khi Playwright treo. Worker chạy non-daemon nên nếu chỉ destroy
+        cửa sổ, tiến trình vẫn sống mãi và người dùng thấy một process ma."""
+        if not self.closing or not (self.worker and self.worker.is_alive()):
+            return
+        os._exit(1)
 
 
 def main() -> None:

@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from .auth.results import WAITING_MANUAL_STATUS
+
 
 @dataclass(frozen=True, slots=True)
 class ViotpConfig:
@@ -22,15 +24,21 @@ class ResultStats:
     success: int = 0
     failed: int = 0
     cancelled: int = 0
+    waiting: int = 0
+
+
+# Trạng thái không phải lỗi. Mọi giá trị khác đều tính là thất bại, vì các mã lỗi auth
+# (invalid_password, rate_limited, ...) được báo thẳng bằng tên mã.
+_NON_FAILURE_STATUSES = {"pending", "running", "success", "cancelled", WAITING_MANUAL_STATUS}
 
 
 def calculate_stats(statuses: dict[int, str]) -> ResultStats:
     values = tuple(statuses.values())
-    terminal_known = {"pending", "running", "success", "cancelled"}
     return ResultStats(
         total=len(values),
         running=values.count("running"),
         success=values.count("success"),
-        failed=sum(status not in terminal_known for status in values),
+        failed=sum(status not in _NON_FAILURE_STATUSES for status in values),
         cancelled=values.count("cancelled"),
+        waiting=values.count(WAITING_MANUAL_STATUS),
     )

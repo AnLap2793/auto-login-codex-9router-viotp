@@ -1,5 +1,6 @@
 import unittest
 
+from login_codex_9router.auth.results import WAITING_MANUAL_STATUS
 from login_codex_9router.ui_models import ViotpConfig, calculate_stats
 
 
@@ -30,6 +31,15 @@ class UiModelsTests(unittest.TestCase):
         self.assertEqual(stats.success, 1)
         self.assertEqual(stats.cancelled, 1)
         self.assertEqual(stats.failed, 2)
+        self.assertEqual(stats.waiting, 0)
+
+    def test_waiting_is_not_counted_as_failure(self) -> None:
+        """`waiting_manual` là trạng thái tạm, không phải lỗi — trước đây mọi trạng thái lạ
+        đều bị gộp vào `failed`."""
+        stats = calculate_stats({1: WAITING_MANUAL_STATUS, 2: "success", 3: "invalid_otp"})
+        self.assertEqual(stats.waiting, 1)
+        self.assertEqual(stats.failed, 1)
+        self.assertEqual(stats.total, 3)
 
 
 if __name__ == "__main__":

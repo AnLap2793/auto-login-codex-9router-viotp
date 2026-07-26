@@ -3,6 +3,7 @@ import importlib.util
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 if importlib.util.find_spec("playwright"):
     from playwright.async_api import async_playwright
@@ -13,10 +14,15 @@ if importlib.util.find_spec("playwright"):
 
 class FixtureServer:
     def __init__(self) -> None:
+        self.authorize_requests: list[str] = []
+        owner = self
+
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
             def do_GET(self) -> None:
+                if self.path.startswith("/api/oauth/codex/authorize"):
+                    owner.authorize_requests.append(self.path)
                 if self.path == "/login":
                     self._html(
                         '<label>Password<input type="password" id="password"></label>'
@@ -98,6 +104,15 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state, "fixture-state")
             self.assertTrue(popup.url.endswith("/oauth"))
             await context.close()
+
+    async def test_open_oauth_uses_given_callback_port(self) -> None:
+        with FixtureServer() as server:
+            context = await self.browser.new_context()
+            await _open_oauth(context, f"http://127.0.0.1:{server.port}", 8899)
+            await context.close()
+        self.assertEqual(len(server.authorize_requests), 1)
+        redirect_uri = parse_qs(urlsplit(server.authorize_requests[0]).query)["redirect_uri"][0]
+        self.assertEqual(redirect_uri, "http://localhost:8899/auth/callback")
 
     async def test_run_account_passes_headless_to_chrome(self) -> None:
         from login_codex_9router.accounts import Account
